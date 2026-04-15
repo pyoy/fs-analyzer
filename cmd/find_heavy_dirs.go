@@ -13,6 +13,7 @@ Usage:
 
 Options:
     --path <dir1> [dir2...]   Specify directories to scan. Default is current directory.
+    --exclude <dir1> [dir2...] Exclude one or more subpaths from scanning and statistics.
     --top <N>                 Display the top N entries. Default is 20.
     --maxdepth <N>            Maximum recursion depth. Default is 1000000.
     --verbose                 Show detailed progress information. Default is false.
@@ -38,7 +39,7 @@ import (
 var (
 	version        = "find-heavy-dirs version 3.01.20251214.go"
 	excludePaths   = []string{"/proc", "/dev", "/sys", "/run"}
-	excludeMap     map[string]bool
+	excludeNormSet map[string]bool
 	targetPaths    []string
 	maxDepth       = 1000000 // Default 1000000
 	topN           = 20      // Default 20
@@ -68,10 +69,14 @@ func main() {
 	parseArgs()
 
 	// Initialize exclude list
-	excludeMap = make(map[string]bool)
+	excludeNormSet = make(map[string]bool)
+	var normalizedExcludes []string
 	for _, p := range excludePaths {
-		excludeMap[p] = true
+		norm := normalizePath(p)
+		excludeNormSet[norm] = true
+		normalizedExcludes = append(normalizedExcludes, norm)
 	}
+	excludePaths = uniqueStrings(normalizedExcludes)
 
 	// Optimize target paths: Remove subdirectories if their parent is also in the list to avoid double counting
 	targetPaths = removeSubdirectories(targetPaths)
@@ -108,7 +113,7 @@ func main() {
 	var statsList []*DirStat
 	for _, s := range dirStats {
 		// Filter out results not under the search root paths (due to bottom-up aggregation, parent of roots might be included, need to exclude)
-		if isUnderTargets(s.Path) {
+		if isUnderTargets(s.Path) && !isExactTarget(s.Path) {
 			statsList = append(statsList, s)
 		}
 	}
@@ -149,7 +154,7 @@ func scanDirectory(root string) int {
 		}
 
 		// Check exclude paths (Prune)
-		if d.IsDir() && excludeMap[path] {
+		if d.IsDir() && isExcluded(path) {
 			return filepath.SkipDir
 		}
 
@@ -231,9 +236,21 @@ func getDirStat(path string) *DirStat {
 
 // isUnderTargets checks if the path is under the user-specified search paths
 func isUnderTargets(path string) bool {
+	normPath := normalizePath(path)
 	for _, root := range targetPaths {
-		absRoot, _ := filepath.Abs(root)
-		if strings.HasPrefix(path, absRoot) {
+		normRoot := normalizePath(root)
+		if isPathEqualOrSubpath(normPath, normRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+// isExactTarget checks whether path exactly matches one of user input roots.
+func isExactTarget(path string) bool {
+	normPath := normalizePath(path)
+	for _, root := range targetPaths {
+		if normPath == normalizePath(root) {
 			return true
 		}
 	}
@@ -277,17 +294,7 @@ func removeSubdirectories(paths []string) []string {
 			continue // Duplicate
 		}
 
-		// Ensure strictly child (starts with parent + separator)
-		// or parent is root "/"
-		isSub := false
-		if strings.HasPrefix(p, last+string(os.PathSeparator)) {
-			isSub = true
-		} else if last == filepath.VolumeName(last)+string(os.PathSeparator) && strings.HasPrefix(p, last) {
-			// specific check for root (e.g. C:\ or /)
-			isSub = true
-		}
-
-		if !isSub {
+		if !isPathEqualOrSubpath(normalizePath(p), normalizePath(last)) {
 			clean = append(clean, p)
 		}
 	}
@@ -329,6 +336,12 @@ func parseArgs() {
 				topN = val
 				i++
 			}
+		case "--exclude":
+			// Read all subsequent non-option arguments as exclude paths
+			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				excludePaths = append(excludePaths, args[i+1])
+				i++
+			}
 		case "--verbose":
 			verbose = true
 		case "--display-runtime":
@@ -353,9 +366,10 @@ func parseArgs() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: find_heavy_dirs [--path <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]")
+	fmt.Println("Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]")
 	fmt.Println("Options:")
 	fmt.Println("  --path <path...>: One or more paths to search. Default is current directory.")
+	fmt.Println("  --exclude <path...>: One or more subpaths to exclude from scanning and statistics.")
 	fmt.Println("  --maxdepth <N>:   Limit the search to N levels deep. Default is 1000000.")
 	fmt.Println("  --top <N>:        Display the top N entries. Default is 20.")
 	fmt.Println("  --verbose:        Show detailed progress information.")
@@ -409,8 +423,72 @@ func printTable(title string, list []*DirStat, isSize bool) {
 	}
 }
 
+func normalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	cleaned := filepath.Clean(abs)
+	if runtime.GOOS == "windows" {
+		cleaned = strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+func isPathEqualOrSubpath(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func isExcluded(path string) bool {
+	normPath := normalizePath(path)
+	for _, ex := range excludePaths {
+		normEx := normalizePath(ex)
+		if ex == "" || excludeNormSet[normEx] {
+			if isPathEqualOrSubpath(normPath, normEx) {
+				return true
+			}
+			continue
+		}
+		if isPathEqualOrSubpath(normPath, normEx) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(input []string) []string {
+	seen := make(map[string]bool, len(input))
+	result := make([]string, 0, len(input))
+	for _, s := range input {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		result = append(result, s)
+	}
+	return result
+}
+
 /*
 Change History:
+2026-04-14:
+ - Fixed target scope matching for filesystem roots (e.g. "/" and "C:\") so child directories are still listed while excluding only the exact target path itself.
+ - Added --exclude parameter to skip one or more subpaths from scanning/statistics.
+ - Excluded user-specified target root paths from ranking output to avoid misleading root total values.
+
 2025-12-14:
  - Fixed a bug where the root directory was double-counted (self-aggregation) in statistics.
  - Added verbose warnings for access denied errors during scanning.

@@ -29,16 +29,18 @@ In a directory structure with 1,827,814 files totaling 166GB:
 **Summary**: In this test environment, the Go program's execution efficiency is 8.48 times that of the shell script. It uses more CPU and disk I/O than the shell script, but because it runs in a single thread, its impact on other programs in a multi-core CPU system is minimal. The disk I/O usage of the Go executable is higher, while the shell script's CPU and disk I/O usage fluctuates significantly, generally imposing less pressure.  
 
 ## Statistical Accuracy  
-The statistical results of the Go executable and the shell script are largely consistent, but the Go executable can count more files, making its statistics more accurate. The reported size and file count may be slightly higher than those from the shell script.  
+The tool focuses on ranking subdirectories under the specified path. To avoid confusion caused by mount points, permissions, or special file systems, the explicitly specified target path itself is not shown in the ranking output, but its child subdirectories are still listed (including when the target is `/` or `C:\`).  
+You can exclude one or more subpaths from both traversal and statistics by using `--exclude`, for example: `--exclude /data/mount1 /data/mount2` or `--exclude C:\mnt\disk1 C:\mnt\disk2`.  
 
 # Shell Script Usage Help  
 A POSIX-compliant shell script designed to locate the top subdirectories within a specified path, sorted by file size and number of files.  
 Runs on: dash (Debian/Ubuntu), bash (RHEL/CentOS/RockyLinux/Almalinux/OpenEuler/AnolisOS), zsh (macOS)  
 
 ```  
-Usage: ./find-heavy-dirs.sh [--path <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
+Usage: ./find-heavy-dirs.sh [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
 Options:  
   --path <path...>: One or more paths to search. Default is current directory.  
+  --exclude <path...>: One or more subpaths to exclude from scanning and statistics.  
   --maxdepth <N>:   Limit the search to N levels deep (default: unlimited).  
   --top <N>:        Display the top N entries (default: 20).  
   --verbose:        Show detailed progress information.  
@@ -76,13 +78,13 @@ To ensure 100% smooth operation on all versions like EL6, EL7, EL8, EL9, EL10, D
 Linux (compile to an executable named `find-heavy-dirs`):  
 ```bash  
 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../bin/find-heavy-dirs ./find_heavy_dirs.go  
-```  
+```
   
 Windows (cross-compilation):  
 ```bash  
 set GOOS=windows  
 set GOARCH=amd64  
-go build -ldflags="-s -w" -o ../bin/find-heavy-dirs.exe ./find_heavy_dirs.go  
+go build -ldflags="-s -w" -o ../bin/find-heavy-dirs-windows-amd64.exe ./find_heavy_dirs.go  
 ```  
   
 macOS (cross-compilation):  
@@ -92,12 +94,47 @@ set GOARCH=amd64
 go build -ldflags="-s -w" -o ../bin/find-heavy-dirs-darwin-amd64 ./find_heavy_dirs.go  
 ```  
   
+---
+  
+It is entirely possible to cross-compile executable files for Linux, Windows, and macOS on Windows:
+Download the Windows version of the Go installer from `https://go.dev/dl/` and install it.  
+
+```ps1
+$env:CGO_ENABLED="0"
+$env:GOOS="linux"
+$env:GOARCH="amd64"
+go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -buildid=" -o ../bin/find-heavy-dirs-linux-amd64 ./find_heavy_dirs.go
+```
+  
+```ps1
+$env:CGO_ENABLED="0"
+$env:GOOS="linux"
+$env:GOARCH="arm64"
+go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -buildid=" -o ../bin/find-heavy-dirs-linux-arm64 ./find_heavy_dirs.go
+```
+
+```ps1
+$env:CGO_ENABLED="0"
+$env:GOOS="windows"
+$env:GOARCH="amd64"
+go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -buildid=" -o ../bin/find-heavy-dirs-windows-amd64.exe ./find_heavy_dirs.go
+```
+
+```ps1
+$env:CGO_ENABLED="0"
+$env:GOOS="darwin"
+$env:GOARCH="amd64"
+go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -buildid=" -o ../bin/find-heavy-dirs-darwin-amd64 ./find_heavy_dirs.go
+```
+  
+  
 # Go Executable Usage Help  
 A standalone binary, no Go environment installation required, just run directly.  
 ```  
-Usage: find_heavy_dirs [--path <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
+Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
 Options:  
   --path <path...>: One or more paths to search. Default is current directory.  
+  --exclude <path...>: One or more subpaths to exclude from scanning and statistics.  
   --maxdepth <N>:   Limit the search to N levels deep. Default is 1000000.  
   --top <N>:        Display the top N entries. Default is 20.  
   --verbose:        Show detailed progress information.  
@@ -110,17 +147,17 @@ Options:
 #Grant execution permissions and Run  
 ```bash  
 chmod +x find-heavy-dirs   
-./find-heavy-dirs --path /usr/lib /var --maxdepth 1500 --top 15 --display-runtime  
+./find-heavy-dirs --path /usr/lib /var --maxdepth 1500 --top 13 --display-runtime  
+# Exclude mounted or unnecessary subpaths from statistics
+./find-heavy-dirs --path /data --exclude /data/mnt1 /data/mnt2 --top 19 --display-runtime
 ```  
 Compatible with Debian/Ubuntu series systems, and RHEL/CentOS/RockyLinux/Almalinux/OpenEuler/AnolisOS series systems. Supports at least el6-el9 distributions or derivative distributions, and possibly more. Please test it yourself.  
   
 Output is as follows:  
 ```
---- Top 15 Largest Subdirectories by Size ---
+--- Top 13 Largest Subdirectories by Size ---
 Metric          | Path                                              
 ----------------------------------------------------------------------
-1.4 GB          | /var
-1.1 GB          | /usr/lib
 769.7 MB        | /var/log
 660.4 MB        | /usr/lib/firmware
 526.9 MB        | /var/cache
@@ -135,11 +172,9 @@ Metric          | Path
 124.8 MB        | /var/lib/rpm
 112.2 MB        | /usr/lib/golang/pkg
 
---- Top 15 Subdirectories by File Count ---
+--- Top 13 Subdirectories by File Count ---
 Metric          | Path                                              
 ----------------------------------------------------------------------
-15626 Files     | /usr/lib
-7504 Files      | /var
 7238 Files      | /var/lib
 7202 Files      | /var/lib/yum
 7126 Files      | /var/lib/yum/yumdb
@@ -160,14 +195,13 @@ Both Windows and macOS systems can be used as a reference for Linux.
   
 ## Usage example on Windows  
 ```ps1  
-cmd /c find-heavy-dirs.exe --path c:\Windows --top 15 --display-runtime  
+cmd /c find-heavy-dirs.exe --path c:\Windows --top 14 --display-runtime  
 ```  
 Output is as follows:  
 ```  
---- Top 15 Largest Subdirectories by Size ---  
+--- Top 14 Largest Subdirectories by Size ---  
 Metric          | Path  
-----------------------------------------------------------------------  
-31.7 GB         | c:\Windows  
+----------------------------------------------------------------------   
 19.8 GB         | c:\Windows\WinSxS  
 4.2 GB          | c:\Windows\System32  
 2.4 GB          | c:\Windows\SoftwareDistribution  
@@ -183,10 +217,9 @@ Metric          | Path
 595.7 MB        | ...microsoft-edge-webview_31bf3856ad364e35_10.0.26100.7171_none_2ed7609d3aa5a301  
 579.3 MB        | ...microsoft-edge-webview_31bf3856ad364e35_10.0.26100.6899_none_2e8cf9973add6927  
   
---- Top 15 Subdirectories by File Count ---  
+--- Top 14 Subdirectories by File Count ---  
 Metric          | Path  
 ----------------------------------------------------------------------  
-461226 Files    | c:\Windows  
 270675 Files    | c:\Windows\SoftwareDistribution  
 270659 Files    | c:\Windows\SoftwareDistribution\Download  
 270650 Files    | c:\Windows\SoftwareDistribution\Download\2f7d46b7f2bbea65e38359aca32fefdd  
@@ -208,14 +241,13 @@ Processed in 14.56 second(s)
 ## Usage example on macOS  
 ```bash  
 chmod +x find-heavy-dirs-darwin-amd64  
-./find-heavy-dirs-darwin-amd64 --path /usr/lib --top 15 --display-runtime  
+./find-heavy-dirs-darwin-amd64 --path /usr/lib --top 14 --display-runtime  
 ```  
 Output is as follows:    
 ```  
---- Top 15 Largest Subdirectories by Size ---
+--- Top 14 Largest Subdirectories by Size ---
 Metric          | Path                                              
 ----------------------------------------------------------------------
-32.8 MB         | /usr/lib
 7.7 MB          | /usr/lib/usd
 6.2 MB          | /usr/lib/usd/usd
 5.5 MB          | /usr/lib/zsh/5.9
@@ -231,10 +263,9 @@ Metric          | Path
 2.2 MB          | /usr/lib/pam
 1.5 MB          | /usr/lib/system/introspection
 
---- Top 15 Subdirectories by File Count ---
+--- Top 14 Subdirectories by File Count ---
 Metric          | Path                                              
 ----------------------------------------------------------------------
-493 Files       | /usr/lib
 353 Files       | /usr/lib/usd
 210 Files       | /usr/lib/usd/libraries
 137 Files       | /usr/lib/usd/usd

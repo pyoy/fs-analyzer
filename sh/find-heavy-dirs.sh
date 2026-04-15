@@ -12,13 +12,14 @@
 start_time=$(date +%s)
 
 #Full version of the script
-export ver=3.01.20251214.ce
+export ver=3.02.20260414.ce
 
 # Function to display usage information
 usage() {
-  echo "Usage: $0 [--path <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]" >&2
+  echo "Usage: $0 [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]" >&2
   echo "Options:" >&2
   echo "  --path <path...>: One or more paths to search. Default is current directory." >&2
+  echo "  --exclude <path...>: One or more subpaths to exclude from scanning and statistics." >&2
   echo "  --maxdepth <N>:   Limit the search to N levels deep (default: unlimited)." >&2
   echo "  --top <N>:        Display the top N entries (default: 20)." >&2
   echo "  --verbose:        Show detailed progress information." >&2
@@ -33,6 +34,7 @@ usage() {
 # and optional arguments in a POSIX-compliant way (no arrays).
 
 path_list=""
+exclude_list=""
 max_depth_arg=""
 top_n=20
 verbose=0
@@ -76,6 +78,18 @@ while [ $# -gt 0 ]; do
           shift
           ;;
       esac
+      ;;
+    --exclude)
+      shift # Move past --exclude
+      if [ $# -eq 0 ] || [ "$(echo "$1" | cut -c1-2)" = "--" ]; then
+        echo "Error: --exclude requires at least one argument." >&2
+        usage
+      fi
+      # Consume all exclude path arguments until the next option (starting with --)
+      while [ $# -gt 0 ] && [ "$(echo "$1" | cut -c1-2)" != "--" ]; do
+        exclude_list="$exclude_list \"$1\""
+        shift
+      done
       ;;
     --top)
       shift
@@ -125,6 +139,9 @@ fi
 if [ "$verbose" -eq 1 ]; then
   echo "Starting scan (Ver: $ver)..."
   echo "Targets: $path_list"
+  if [ -n "$exclude_list" ]; then
+    echo "Exclude: $exclude_list"
+  fi
   if [ -n "$max_depth_arg" ]; then
     echo "Max Depth: ${max_depth_arg#-maxdepth }"
   fi
@@ -132,9 +149,66 @@ fi
 
 # --- Define Filters ---
 
-# Paths to exclude (system mount points)
-# We use -path, so these must be the exact absolute paths.
-prune_paths="\( -path /proc -o -path /dev -o -path /sys -o -path /run \)"
+# Paths to exclude (system mount points + user-provided excludes)
+default_excludes="/proc /dev /sys /run"
+
+make_prune_expr_from_quoted_list() {
+  # Build: \( -path "X" -o -path "X/*" -o ... \)
+  quoted="$1"
+  expr=""
+  if [ -n "$quoted" ]; then
+    eval "set -- $quoted"
+    while [ $# -gt 0 ]; do
+      p="$1"
+      # Strip trailing slash for stable matching (keep "/" untouched)
+      while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do
+        p="${p%/}"
+      done
+      [ -z "$p" ] && p="/"
+      if [ -z "$expr" ]; then
+        expr="-path \"$p\" -o -path \"$p/*\""
+      else
+        expr="$expr -o -path \"$p\" -o -path \"$p/*\""
+      fi
+      shift
+    done
+  fi
+  if [ -z "$expr" ]; then
+    echo ""
+  else
+    echo "\\( $expr \\)"
+  fi
+}
+
+default_excludes_quoted=""
+for p in $default_excludes; do
+  default_excludes_quoted="$default_excludes_quoted \"$p\""
+done
+all_excludes_quoted="$default_excludes_quoted $exclude_list"
+prune_paths="$(make_prune_expr_from_quoted_list "$all_excludes_quoted")"
+
+# Build normalized root list for later filtering of exact target roots in ranking.
+# Keep both raw roots and absolute roots so relative --path values are handled too.
+norm_roots=""
+eval "set -- $path_list"
+while [ $# -gt 0 ]; do
+  rp="$1"
+  trim_rp="$rp"
+  while [ "$trim_rp" != "/" ] && [ "${trim_rp%/}" != "$trim_rp" ]; do
+    trim_rp="${trim_rp%/}"
+  done
+  [ -z "$trim_rp" ] && trim_rp="/"
+  norm_roots="$norm_roots$trim_rp
+"
+  if [ -d "$rp" ]; then
+    abs_rp="$(cd "$rp" 2>/dev/null && pwd -P)"
+    if [ -n "$abs_rp" ]; then
+      norm_roots="$norm_roots$abs_rp
+"
+    fi
+  fi
+  shift
+done
 
 
 
@@ -238,6 +312,21 @@ eval "find $path_list $max_depth_arg -mindepth 1 $prune_paths -prune -o \( -type
   }' | \
   sort | \
   uniq -c | \
+  awk -v roots="$norm_roots" '
+BEGIN {
+  n = split(roots, rr, "\n")
+  for (i = 1; i <= n; i++) {
+    if (rr[i] != "") {
+      rootSet[rr[i]] = 1
+    }
+  }
+}
+{
+  p = $2
+  if (!(p in rootSet)) {
+    print $0
+  }
+}' | \
   sort -nr | \
   head -n "$top_n"
 
@@ -251,6 +340,7 @@ fi
 #-----------------------------------------------
 # Change History:
 # date       ver   note
+# 2026/04/14 v3.02 Added --exclude (multi-path prune), excluded only exact target paths from ranking output, and kept child-directory listings when target is filesystem root.
 # 2025/12/14 v3.01 Added --top, --verbose, --display-runtime, --version, and default path "."
 # 2025/11/05 v2.01 Improved, and cross-platform support in unix.
 # 2024/09/16 v1.01 Initial creation.
