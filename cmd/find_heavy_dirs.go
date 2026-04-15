@@ -37,7 +37,7 @@ import (
 // --- Configuration & Constants ---
 
 var (
-	version        = "find-heavy-dirs version 3.01.20251214.go"
+	version        = "find-heavy-dirs version 3.02.20260415.go"
 	excludePaths   = []string{"/proc", "/dev", "/sys", "/run"}
 	excludeNormSet map[string]bool
 	targetPaths    []string
