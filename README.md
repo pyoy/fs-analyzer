@@ -31,6 +31,17 @@ In a directory structure with 1,827,814 files totaling 166GB:
 ## Statistical Accuracy  
 The tool focuses on ranking subdirectories under the specified path. To avoid confusion caused by mount points, permissions, or special file systems, the explicitly specified target path itself is not shown in the ranking output, but its child subdirectories are still listed (including when the target is `/` or `C:\`).  
 You can exclude one or more subpaths from both traversal and statistics by using `--exclude`, for example: `--exclude /data/mount1 /data/mount2` or `--exclude C:\mnt\disk1 C:\mnt\disk2`.  
+The Go executable supports `--size-mode <disk|apparent>`:
+- `disk` (default on Linux/macOS): uses allocated blocks to align better with `du` output.
+- `apparent`: uses logical file size.
+- On special file systems (such as btrfs/zfs/reflink/compression), minor differences may still exist in `disk` mode.
+- On Windows, `disk` mode is not yet implemented; it currently falls back to `apparent` mode by default.
+
+Additional notes when comparing with system tools:
+- Hard links may lead to different counting behavior depending on tool options.
+- Mount boundaries may affect totals (for example, behavior similar to `du -x`).
+- Permission-denied paths can reduce scanned totals.
+- Unit options (`du -k`, `du -B1`, etc.) should be aligned before comparing.
 
 # Shell Script Usage Help  
 A POSIX-compliant shell script designed to locate the top subdirectories within a specified path, sorted by file size and number of files.  
@@ -131,10 +142,11 @@ go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -buildid=" -o ../bin/f
 # Go Executable Usage Help  
 A standalone binary, no Go environment installation required, just run directly.  
 ```  
-Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
+Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--size-mode <disk|apparent>] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]  
 Options:  
   --path <path...>: One or more paths to search. Default is current directory.  
   --exclude <path...>: One or more subpaths to exclude from scanning and statistics.  
+  --size-mode <disk|apparent>: Size metric mode. Default is disk (Windows currently falls back to apparent).
   --maxdepth <N>:   Limit the search to N levels deep. Default is 1000000.  
   --top <N>:        Display the top N entries. Default is 20.  
   --verbose:        Show detailed progress information.  

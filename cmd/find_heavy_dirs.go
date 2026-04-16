@@ -14,6 +14,7 @@ Usage:
 Options:
     --path <dir1> [dir2...]   Specify directories to scan. Default is current directory.
     --exclude <dir1> [dir2...] Exclude one or more subpaths from scanning and statistics.
+    --size-mode <disk|apparent> Size metric mode. Default is disk (Windows falls back to apparent).
     --top <N>                 Display the top N entries. Default is 20.
     --maxdepth <N>            Maximum recursion depth. Default is 1000000.
     --verbose                 Show detailed progress information. Default is false.
@@ -27,6 +28,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -37,10 +39,11 @@ import (
 // --- Configuration & Constants ---
 
 var (
-	version        = "find-heavy-dirs version 3.02.20260415.go"
+	version        = "find-heavy-dirs version 3.02.20260415b.go"
 	excludePaths   = []string{"/proc", "/dev", "/sys", "/run"}
 	excludeNormSet map[string]bool
 	targetPaths    []string
+	sizeMode       = "disk" // Default disk; on Windows falls back to apparent
 	maxDepth       = 1000000 // Default 1000000
 	topN           = 20      // Default 20
 	verbose        = false   // Default false
@@ -67,6 +70,12 @@ func main() {
 
 	// Parse arguments
 	parseArgs()
+
+	// Windows currently supports apparent mode only.
+	if runtime.GOOS == "windows" && sizeMode == "disk" {
+		fmt.Println("Warning: Windows currently supports apparent mode only. Falling back to --size-mode apparent.")
+		sizeMode = "apparent"
+	}
 
 	// Initialize exclude list
 	excludeNormSet = make(map[string]bool)
@@ -174,7 +183,7 @@ func scanDirectory(root string) int {
 			if err == nil {
 				dirPath := filepath.Dir(path)
 				s := getDirStat(dirPath)
-				s.TotalSize += info.Size()
+				s.TotalSize += getFileSize(info)
 				s.FileCount++ // Record direct file count
 				count++
 			}
@@ -336,6 +345,19 @@ func parseArgs() {
 				topN = val
 				i++
 			}
+		case "--size-mode":
+			if i+1 < len(args) {
+				mode := strings.ToLower(args[i+1])
+				if mode != "disk" && mode != "apparent" {
+					fmt.Println("Error: --size-mode must be one of: disk, apparent")
+					os.Exit(1)
+				}
+				sizeMode = mode
+				i++
+			} else {
+				fmt.Println("Error: --size-mode requires a value: disk or apparent")
+				os.Exit(1)
+			}
 		case "--exclude":
 			// Read all subsequent non-option arguments as exclude paths
 			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
@@ -366,10 +388,11 @@ func parseArgs() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]")
+	fmt.Println("Usage: find_heavy_dirs [--path <path1> path2...] [--exclude <path1> path2...] [--size-mode <disk|apparent>] [--maxdepth <N>] [--top <N>] [--verbose] [--display-runtime] [--version]")
 	fmt.Println("Options:")
 	fmt.Println("  --path <path...>: One or more paths to search. Default is current directory.")
 	fmt.Println("  --exclude <path...>: One or more subpaths to exclude from scanning and statistics.")
+	fmt.Println("  --size-mode <disk|apparent>: Size metric mode. Default is disk (Windows falls back to apparent).")
 	fmt.Println("  --maxdepth <N>:   Limit the search to N levels deep. Default is 1000000.")
 	fmt.Println("  --top <N>:        Display the top N entries. Default is 20.")
 	fmt.Println("  --verbose:        Show detailed progress information.")
@@ -421,6 +444,37 @@ func printTable(title string, list []*DirStat, isSize bool) {
 
 		fmt.Printf("%-15s | %s\n", valStr, displayPath)
 	}
+}
+
+func getFileSize(info fs.FileInfo) int64 {
+	// apparent mode always uses logical file size.
+	if sizeMode == "apparent" {
+		return info.Size()
+	}
+
+	// disk mode on Unix-like systems uses allocated blocks (du-like behavior).
+	// Use reflection to keep this source file cross-platform compilable.
+	stat := info.Sys()
+	if stat != nil {
+		v := reflect.ValueOf(stat)
+		if v.Kind() == reflect.Ptr && !v.IsNil() {
+			v = v.Elem()
+		}
+		if v.IsValid() && v.Kind() == reflect.Struct {
+			blocks := v.FieldByName("Blocks")
+			if blocks.IsValid() {
+				switch blocks.Kind() {
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+					return blocks.Int() * 512
+				case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+					return int64(blocks.Uint()) * 512
+				}
+			}
+		}
+	}
+
+	// Fallback for platforms/filesystems without block info.
+	return info.Size()
 }
 
 func normalizePath(p string) string {
@@ -484,6 +538,10 @@ func uniqueStrings(input []string) []string {
 
 /*
 Change History:
+2026-04-15:
+ - Added --size-mode (disk|apparent). Default is disk, with Windows currently falling back to apparent.
+ - disk mode now uses allocated blocks (Stat_t.Blocks * 512) to better align with du output on Unix-like systems.
+
 2026-04-14:
  - Fixed target scope matching for filesystem roots (e.g. "/" and "C:\") so child directories are still listed while excluding only the exact target path itself.
  - Added --exclude parameter to skip one or more subpaths from scanning/statistics.
